@@ -11,10 +11,11 @@ import requests
 
 class DrDotComClientError(RuntimeError):
     ERROR_CODES = {
+        1000: "尝试请求失败，请检查无线连接",
         1001: "获取登录参数失败"
     }
 
-    def __init__(self, errcode):
+    def __init__(self, errcode: int):
         self.errcode = errcode
 
     def __str__(self):
@@ -39,16 +40,14 @@ class DrDotComClient:
         'upgrade-insecure-requests': '1'
     }
 
-    def __init__(self, redirect_url="http://2.2.2.2", conf="user.conf", debug=False):
+    def __init__(self, redirect_url: str = "http://2.2.2.2", conf: str = "user.conf", debug: bool = False):
         self.debug = debug
-        logging.basicConfig(level=logging.DEBUG,
+        logging.basicConfig(level=logging.INFO,
                             format='%(asctime)s %(levelname)s [%(name)s - %(threadName)s]%(message)s')
-        logging.getLogger("urllib3").setLevel(logging.INFO)
+        # logging.getLogger("urllib3").setLevel(logging.INFO)  # Disable urllib3 debug output
         self.logger = logging.getLogger("DrDotComClient")
         if self.debug:
             self.logger.setLevel(logging.DEBUG)
-        else:
-            self.logger.setLevel(logging.INFO)
 
         self.redirect_url = redirect_url
         self.conf_file = conf
@@ -85,42 +84,77 @@ class DrDotComClient:
         else:
             self.logger.error(f"Config file {self.conf_file} not exists")
 
+    def __drcom_api_request_wrapper(self, url: str, params: dict = None) -> requests.Response:
+        """服务端调用API请求包装器，包含错误封装"""
+        err_flag = False
+        try:
+            return requests.get(url, params=params, headers=self.HEADERS, allow_redirects=False)
+        except requests.exceptions.ConnectionError as err:
+            self.logger.error(err)
+            err_flag = 1000
+        finally:
+            if err_flag:
+                raise DrDotComClientError(err_flag)
+
+    def __on_user_status(self, status_data: dict):
+        """控制用户动态信息的更新与展示"""
+        for k, v in status_data.items():
+            if k == "online" and v != self.online:
+                self.online = v
+                self.logger.info(f"Status update: {'Online' if self.online else 'Offline'}")
+            elif k == "user_ip" and v != self.user_ip:
+                self.user_ip = v
+                self.logger.info(f"Bind client ip at {self.user_ip}")
+            elif k == "user_mac" and v != self.user_mac:
+                self.user_mac = v
+                self.logger.info(f"Bind client mac at {self.user_mac}")
+            elif k == "ac_ip" and v != self.ac_ip:
+                self.ac_ip = v
+                self.logger.info(f"Updated ac ip at {self.ac_ip}")
+            elif k == "ac_name" and v != self.ac_name:
+                self.ac_name = v
+                self.logger.info(f"Updated ac name at {self.ac_name}")
+
     def update_user_status(self):
-        # 更新客户端状态
+        """更新客户端状态"""
         params = {
             "callback": self.jsonp_callback,
             "jsVersion": "4.1.3",
             "v": random.randint(1000, 9999),
             "lang": "zh"
         }
-        res = requests.get(f"http://{self.host}/drcom/chkstatus?", params=params, headers=self.HEADERS)
-        self.user_status = json.loads(res.text.split()[0][len(self.jsonp_callback) + 1:-1])
+
+        res = self.__drcom_api_request_wrapper(f"http://{self.host}/drcom/chkstatus?", params)
+        self.user_status = json.loads(res.text.strip().rstrip(";")[len(self.jsonp_callback) + 1:-1])
         self.logger.debug(f"Fetch status: {self.user_status}")
         new_status = bool(self.user_status["result"])
-        if new_status != self.online:
-            self.logger.info(f"Status update: {'Online' if new_status else 'Offline'}")
-            self.online = new_status
-        if self.online:
-            # 在线时更新设备信息
-            if self.user_status['v4ip'] != self.user_ip:
-                self.logger.info(f"Bind client ip at {self.user_status['v4ip']}")
-                self.user_ip = self.user_status['v4ip']
-            if self.user_status['olmac'] != self.user_mac:
-                self.logger.info(f"Bind client mac at {self.user_status['olmac']}")
-                self.user_mac = self.user_status['olmac']
+        # 在线与离线状态更新数据不同
+        if new_status:
+            self.__on_user_status({
+                "online": new_status,
+                "user_ip": self.user_status['v4ip'],
+                "user_mac": self.user_status['olmac']
+            })
+        else:
+            self.__on_user_status({
+                "online": new_status
+            })
+            self.get_login_params()  # 未登录时使用重定向链接获得更多信息
 
     def get_login_params(self):
-        # 未登录时，使用重定向返回参数获得登录设备信息
-        res = requests.get(self.redirect_url, headers=self.HEADERS, allow_redirects=False)
+        """未登录时，使用重定向返回参数获得登录设备信息"""
+        res = self.__drcom_api_request_wrapper(self.redirect_url)
         if res.status_code == 302:
             loc = res.headers["Location"]
             query = urllib.parse.parse_qs(loc.split("?")[1])
             # for k, v in query.items():
             #     query[k] = v[0]  # 处理自带list
-            self.user_ip = query["wlanuserip"][0]
-            self.user_mac = query["wlanusermac"][0]
-            self.ac_ip = query["wlanacip"][0]
-            self.ac_name = query["wlanacname"][0]
+            self.__on_user_status({
+                "user_ip": query["wlanuserip"][0],
+                "user_mac": query["wlanusermac"][0],
+                "ac_ip": query["wlanacip"][0],
+                "ac_name": query["wlanacname"][0]
+            })
             # return query
         else:
             self.logger.error("Get redirect params failed")
@@ -128,8 +162,13 @@ class DrDotComClient:
             self.logger.debug(res.text)
             raise DrDotComClientError(1001)
 
-    def login(self):
-        # 发起登陆
+    def login(self, force=False):
+        """发起登陆"""
+        self.get_login_params()  # 强制更新
+        if self.online:
+            self.logger.warning("Client is already online!")
+            if not force:
+                return
         params = {
             "callback": self.jsonp_callback,
             "jsVersion": "4.1.3",
@@ -145,15 +184,23 @@ class DrDotComClient:
             "terminal_type": 1
         }
         self.logger.info(f"Start login to {self.user_account}")
-        res = requests.get(f"http://{self.host}:{self.eportal_port}/eportal/portal/login?", params=params,
-                           headers=self.HEADERS)
-        result = json.loads(res.text.split()[0][len(self.jsonp_callback) + 1:-1])
+        res = self.__drcom_api_request_wrapper(f"http://{self.host}:{self.eportal_port}/eportal/portal/login?", params)
+        result = json.loads(res.text.strip().rstrip(";")[len(self.jsonp_callback) + 1:-1])
         if result["result"]:
             self.logger.info("Login success")
             self.update_user_status()
         else:
             self.logger.error(f"Login failed[{result['ret_code']}]: {result['msg']}")
 
+    def logout(self):
+        """登出客户端"""
+        self.logger.info("Client logout")
+        params = {
+            "callback": self.jsonp_callback
+        }
+        res = self.__drcom_api_request_wrapper(f"http://{self.host}:{self.eportal_port}/eportal/portal/logout?", params)
+        self.update_user_status()
+
 
 if __name__ == '__main__':
-    o = DrDotComClient()
+    o = DrDotComClient(debug=False)

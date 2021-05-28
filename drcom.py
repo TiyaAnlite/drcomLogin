@@ -48,6 +48,8 @@ class DrDotComClient:
         self.logger = logging.getLogger("DrDotComClient")
         if self.debug:
             self.logger.setLevel(logging.DEBUG)
+        else:
+            self.logger.setLevel(logging.INFO)
 
         self.redirect_url = redirect_url
         self.conf_file = conf
@@ -69,6 +71,7 @@ class DrDotComClient:
         self.update_user_status()
 
     def load_conf(self):
+        """从配置文件读取配置"""
         if os.path.exists(self.conf_file):
             cf = configparser.ConfigParser()
             cf.read(self.conf_file, encoding="utf-8")
@@ -114,6 +117,10 @@ class DrDotComClient:
             elif k == "ac_name" and v != self.ac_name:
                 self.ac_name = v
                 self.logger.info(f"Updated ac name at {self.ac_name}")
+
+    def reload(self):
+        """手动重载配置文件，适用于配置热重载"""
+        self.load_conf()
 
     def update_user_status(self):
         """更新客户端状态"""
@@ -191,6 +198,19 @@ class DrDotComClient:
             self.update_user_status()
         else:
             self.logger.error(f"Login failed[{result['ret_code']}]: {result['msg']}")
+
+    def show_status(self):
+        """展示用户信息"""
+        self.update_user_status()
+        print(f"==========Client status: {'Online' if self.online else 'Offline'}==========")
+        print(
+            f"user(account/ip/mac/nid/gid): {self.user_account} || {self.user_ip} || {self.user_mac} || {self.user_status['NID']} || {self.user_status['gid']}")
+        if self.user_status["stime"]:
+            print(f"time(start/end): {self.user_status['stime']} || {self.user_status['etime']}")
+        min_time = f"{int(self.user_status['time'] / 60)}:{self.user_status['time'] % 60}"
+        act_time = f"{int(self.user_status['actt'] / 3600)}:{int(self.user_status['actt'] % 3600 / 60)}:{self.user_status['actt'] % 3600 % 60}"
+        print(f"time(min_count/act): {min_time} || {act_time}")
+        print(f"frame(down/up): {self.user_status['actdf']} || {self.user_status['actuf']}")
 
     def logout(self):
         """登出客户端"""

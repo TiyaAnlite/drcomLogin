@@ -204,13 +204,14 @@ class DrDotComClient:
         self.update_user_status()
         print(f"==========Client status: {'Online' if self.online else 'Offline'}==========")
         print(
-            f"user(account/ip/mac/nid/gid): {self.user_account} || {self.user_ip} || {self.user_mac} || {self.user_status['NID']} || {self.user_status['gid']}")
-        if self.user_status["stime"]:
-            print(f"time(start/end): {self.user_status['stime']} || {self.user_status['etime']}")
-        min_time = f"{int(self.user_status['time'] / 60)}:{self.user_status['time'] % 60}"
-        act_time = f"{int(self.user_status['actt'] / 3600)}:{int(self.user_status['actt'] % 3600 / 60)}:{self.user_status['actt'] % 3600 % 60}"
-        print(f"time(min_count/act): {min_time} || {act_time}")
-        print(f"frame(down/up): {self.user_status['actdf']} || {self.user_status['actuf']}")
+            f"user(account/ip/mac/nid/gid): {self.user_account} || {self.user_ip} || {self.user_mac} || {self.user_status.get('NID')} || {self.user_status.get('gid')}")
+        if self.online:
+            if self.user_status["stime"]:
+                print(f"time(start/end): {self.user_status['stime']} || {self.user_status['etime']}")
+            min_time = f"{int(self.user_status['time'] / 60)}:{self.user_status['time'] % 60}"
+            act_time = f"{int(self.user_status['actt'] / 3600)}:{int(self.user_status['actt'] % 3600 / 60)}:{self.user_status['actt'] % 3600 % 60}"
+            print(f"time(min_count/act): {min_time} || {act_time}")
+            print(f"frame(down/up): {self.user_status['actdf']} || {self.user_status['actuf']}")
 
     def logout(self):
         """登出客户端"""
@@ -223,4 +224,5 @@ class DrDotComClient:
 
 
 if __name__ == '__main__':
-    o = DrDotComClient(debug=False)
+    d = DrDotComClient(debug=False)
+    d.show_status()
